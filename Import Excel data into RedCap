@@ -7,7 +7,7 @@ from redcap import Project, RedcapError
 from datetime import datetime
 from datetime import timedelta
 
-URL = 'https://redcap.smh.ca/redcap/api/'
+URL = 'https://redcap.****yoururl**/redcap/api/'
 # API_KEY = ''
 API_KEY = ''
 project = Project(URL, API_KEY)
@@ -22,7 +22,7 @@ def try_parse_int(s, base=10, val=None):
         val = 0
         return val
 
-
+#Jus a method to format the date. 
 def dateFormat(a):
     my_date = datetime.strptime(a, "%Y-%m-%d %H:%M:%S")
     my_date = my_date.date()
@@ -48,7 +48,7 @@ def mapRsnstp(val):
     return interim_val
 
 
-
+#adding a time delta to some date
 def addTime(some_date, some_seconds):
     if some_seconds is None:
         some_seconds = 0
@@ -64,7 +64,7 @@ def addTime(some_date, some_seconds):
         # print(my_date)
         return some_date
 
-
+# Weird stopwatch format for time that needed foratting before i added it to aother date
 def addTime2(some_date, some_seconds):
     if some_date is not None:
         # print("original date")
@@ -116,11 +116,7 @@ def checkThreeTimes(stm, rtm, wtm):
 
 
 
-# data = {'cr_record_id': '1', 'cr_lat': '52.126', 'cr_datum': '2'}
-#
-# response = project.import_records([data], overwrite='overwrite', format='json')
-# print(response)
-# print(project.field_names)
+
 
 def main():
     ROCworkbook = load_workbook(filename=")
@@ -140,16 +136,7 @@ def main():
     CanRocDD = CanRocDD.dropna(subset=['Variable ID'])
     CanRocDD = CanRocDD.dropna(subset=['BC ID'])
 
-    # Get names of indexes for which column Age has value 30
-    indexNames = CanRocDD[(CanRocDD['Variable ID'] == 'Variable ID')].index
-    # df[(df['col_1'] == 1.0) & (df['col_2'] == 0.0)].index
-
-    # Delete these row indexes from dataFrame
-    CanRocDD.drop(indexNames, inplace=True)
-    indexNames = CanRocDD[(CanRocDD['Variable ID'] == 'minutes 3 through 9, etc.')].index
-    CanRocDD.drop(indexNames, inplace=True)
-    # CanRocDD = CanRocDD[CanRocDD.]
-
+   
 
     col_one_list = CanRocDD['Variable ID'].tolist()
 
@@ -168,7 +155,7 @@ def main():
     Rowcount = 2
     s = 0
     for i in range(5, max_row + 1):
-
+        # loop the excel sheet, row by row and map the values to another excel sheet. Also create a Doctionary Object wth each loop and add to ArrayDic 
         a = ROCsheet.cell(row=i, column=2).value
       
         if a is None:
@@ -177,11 +164,12 @@ def main():
         ArrayDictRow = {}
         ArrayDict.append(ArrayDictRow) # first row (Dictionary) 
 
-        ArrayDict[s]['redcap_data_access_group'] = "bc"  #This is the format for acessing the fields in RedCap. 
+        ArrayDict[s]['redcap_data_access_group'] = "**"  #This is the format for acessing the fields in RedCap. 
+        
         # cr_record_id
         cell_obj = Mapsheet.cell(row=Rowcount, column=1) # Also  creating an excel sheet with the mapped values. 
         cell_obj.value = a
-        ArrayDict[s]['cr_record_id'] = str(a) + "BC"
+        ArrayDict[s]['cr_record_id'] = str(a)
 
         # CR_TX
         cell_obj = Mapsheet.cell(row=Rowcount, column=2)
@@ -448,15 +436,6 @@ def main():
                 ArrayDict[s]['cr_ptmtrm'] = str(addTime(my_date, my_seconds))
                 cell_obj.value = ArrayDict[s]['cr_ptmtrm']
 
-
-        if 0 <= recordId <= 107:
-            my_date = str(ROCsheet.cell(row=i, column=3).value)
-            my_seconds = ROCsheet.cell(row=i, column=449).value
-            if my_seconds not in ['', '0', 0, None]:
-
-                ptmtrm = addTime2(my_date, my_seconds)
-                ArrayDict[s]['cr_ptmtrm'] = str(ptmtrm)
-                cell_obj.value = ptmtrm
 
 
 
@@ -787,7 +766,7 @@ def main():
             print ("Creating datastructure ...")
         s = s + 1
     # print(ArrayDict)
-    response = project.import_records(ArrayDict, overwrite='overwrite', format='json')
+    response = project.import_records(ArrayDict, overwrite='overwrite', format='json') # after creating all the rows of Dictionaries and adding them to arrayDict, load ArrayDict.
     print(response)
     workbook.save(filename=fname)
 
