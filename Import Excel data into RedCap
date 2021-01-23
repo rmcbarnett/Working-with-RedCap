@@ -1,0 +1,800 @@
+import pandas as pd
+import json
+from openpyxl import load_workbook
+from redcap import Project, RedcapError
+from openpyxl import Workbook
+from redcap import Project, RedcapError
+from datetime import datetime
+from datetime import timedelta
+
+URL = 'https://redcap.smh.ca/redcap/api/'
+# API_KEY = ''
+API_KEY = ''
+project = Project(URL, API_KEY)
+
+
+
+def try_parse_int(s, base=10, val=None):
+    try:
+        s = str(s)
+        return int(s, base)
+    except ValueError:
+        val = 0
+        return val
+
+
+def dateFormat(a):
+    my_date = datetime.strptime(a, "%Y-%m-%d %H:%M:%S")
+    my_date = my_date.date()
+    return my_date
+
+def mapRsnstp(val):
+    interim_val = ''
+
+    if val in [1, '1']:
+        interim_val = 0
+    elif val in [3, '3']:
+        interim_val = 2
+    elif val in [6, '6',14,'14']:
+        interim_val = 4
+    elif val in [12, '12']:
+        interim_val = 6
+    elif val in [13, '13']:
+        interim_val = 7
+    elif val in [10 ,'10']:
+        interim_val= 8
+    elif val in [8, '8', 9,'9']:
+        interim_val = 5
+    return interim_val
+
+
+
+def addTime(some_date, some_seconds):
+    if some_seconds is None:
+        some_seconds = 0
+        # print("Mydate")
+    # print(my_date)
+    if some_date is not None:
+        some_date = str(some_date)
+        some_date = datetime.strptime(some_date, "%Y-%m-%d %H:%M:%S")
+        # print("time")
+        # print(my_date)
+        some_date = some_date + timedelta(seconds=some_seconds)
+        # print("time added")
+        # print(my_date)
+        return some_date
+
+
+def addTime2(some_date, some_seconds):
+    if some_date is not None:
+        # print("original date")
+        # print(my_date)
+        some_date = datetime.strptime(some_date, "%Y-%m-%d %H:%M:%S")
+
+        if some_seconds not in ['0','1',0,'.', "", None]:
+            some_seconds = str(some_seconds)
+            # print("Check the Myseconds")
+            # print(some_seconds)
+            # print(len(some_seconds))
+            if ".000" in some_seconds:
+                h, m, sec = some_seconds.split(':')
+                h = int(h)
+                m = int(m)
+
+                sec = sec.replace(".000", "")
+                sec = int(sec)
+
+                dispatchtime = timedelta(hours=h, minutes=m, seconds=sec)
+                some_date = some_date + dispatchtime
+
+                # print(sec)
+            elif ".000" not in some_seconds and ":" in some_seconds:
+                h, m, sec = some_seconds.split(':')
+                h = int(h)
+                m = int(m)
+
+                sec = int(sec)
+
+
+                dispatchtime = timedelta(hours=h, minutes=m, seconds=sec)
+                some_date = some_date + dispatchtime
+                # print("final dispatch time the hard way")
+                # print(finaldispatchtime)
+    return some_date
+
+
+def checkThreeTimes(stm, rtm, wtm):
+    ReturnTime = 0
+    if stm not in [None, '']:
+        ReturnTime = stm
+    elif stm in [None, ''] and rtm not in [None, '']:
+        ReturnTime = rtm
+    elif stm in [None, ''] and rtm in [None, ''] and wtm not in [None, '']:
+        ReturnTime = wtm
+    return ReturnTime
+
+
+
+
+# data = {'cr_record_id': '1', 'cr_lat': '52.126', 'cr_datum': '2'}
+#
+# response = project.import_records([data], overwrite='overwrite', format='json')
+# print(response)
+# print(project.field_names)
+
+def main():
+    ROCworkbook = load_workbook(filename=")
+    #TestWorkbook = load_workbook(filename="//****.xlsx")
+    # print(ROCworkbook.sheetnames)
+    ROCsheet = ROCworkbook.active
+    max_row = ROCsheet.max_row
+    fname = "*****.xlsx"
+    workbook = Workbook()
+    Mapsheet = workbook.active
+    ArrayDict = [] # This is my List , that will conatin one dictionary of values per row.
+
+    CanRocDD = pd.read_excel(r'****.xlsx',
+                             header=1, usecols="A,E")
+    # CanRocDD.info()
+    pd.set_option("max_rows", None)
+    CanRocDD = CanRocDD.dropna(subset=['Variable ID'])
+    CanRocDD = CanRocDD.dropna(subset=['BC ID'])
+
+    # Get names of indexes for which column Age has value 30
+    indexNames = CanRocDD[(CanRocDD['Variable ID'] == 'Variable ID')].index
+    # df[(df['col_1'] == 1.0) & (df['col_2'] == 0.0)].index
+
+    # Delete these row indexes from dataFrame
+    CanRocDD.drop(indexNames, inplace=True)
+    indexNames = CanRocDD[(CanRocDD['Variable ID'] == 'minutes 3 through 9, etc.')].index
+    CanRocDD.drop(indexNames, inplace=True)
+    # CanRocDD = CanRocDD[CanRocDD.]
+
+
+    col_one_list = CanRocDD['Variable ID'].tolist()
+
+    # Put the column names in the Mapped Excel Sheet
+    length = len(col_one_list)
+    for i in range(0, length):
+        if i == 0:
+            a = Mapsheet.cell(row=1, column=1)
+            a.value = col_one_list[i]
+            # print("The first value is" + a.value)
+        else:
+            a = Mapsheet.cell(row=1, column=i + 1)
+            a.value = col_one_list[i]
+    # workbook.save(filename=fname)
+
+    Rowcount = 2
+    s = 0
+    for i in range(5, max_row + 1):
+
+        a = ROCsheet.cell(row=i, column=2).value
+      
+        if a is None:
+            continue   # skip rows in the Exel sheet where the first row that contains the record ID is blank
+       
+        ArrayDictRow = {}
+        ArrayDict.append(ArrayDictRow) # first row (Dictionary) 
+
+        ArrayDict[s]['redcap_data_access_group'] = "bc"  #This is the format for acessing the fields in RedCap. 
+        # cr_record_id
+        cell_obj = Mapsheet.cell(row=Rowcount, column=1) # Also  creating an excel sheet with the mapped values. 
+        cell_obj.value = a
+        ArrayDict[s]['cr_record_id'] = str(a) + "BC"
+
+        # CR_TX
+        cell_obj = Mapsheet.cell(row=Rowcount, column=2)
+        cell_obj.value = ROCsheet.cell(row=i, column=5).value
+        ArrayDict[s]['cr_tx'] = ROCsheet.cell(row=i, column=5).value
+        recordId = int(a)
+        if 0 <= recordId <= 107:
+            ArrayDict[s]['cr_tx'] = 1
+            cell_obj.value = 1
+
+            # CR_EPDT
+        cell_obj = Mapsheet.cell(row=Rowcount, column=3)
+        a = ROCsheet.cell(row=i, column=3).value
+        if a is not None:
+            cell_obj.value = dateFormat(str(a))
+            ArrayDict[s]['cr_epdt'] = str(cell_obj.value)
+        elif a is None:
+            ArrayDict[s]['cr_epdt'] = ""
+
+        # CR_LAT
+        cell_obj = Mapsheet.cell(row=Rowcount, column=4)
+        a = ROCsheet.cell(row=i, column=6).value
+        if a != '' and a is not None:
+            if type(a) == str:
+                a = float(a)
+            cell_obj.value = a
+            ArrayDict[s]['cr_lat'] = format(a, ".3f")
+
+        # CR_LONG
+        cell_obj = Mapsheet.cell(row=Rowcount, column=5)
+        a = ROCsheet.cell(row=i, column=7).value
+        if  a != '' and a is not None:
+            if type(a) == str:
+                if a.endswith('.') or a.endswith("'") or a.endswith("`"):
+                    a = a[:-1] #removed last character
+                    a = float(a)
+            cell_obj.value = a
+
+            a = float(a)
+            ArrayDict[s]['cr_long'] = format(a, ".3f")
+
+        # crdatum
+        cell_obj = Mapsheet.cell(row=Rowcount, column=6)
+        a = ROCsheet.cell(row=i, column=666).value
+        cell_obj.value = a
+        ArrayDict[s]['cr_datum'] = a
+
+        # cr_unknowngeo
+        cell_obj = Mapsheet.cell(row=Rowcount, column=7)
+        a = ROCsheet.cell(row=i, column=657).value
+        if a in [3, '3']:
+            cell_obj.value = 0
+            ArrayDict[s]['cr_unknowngeo___1'] = 0 
+
+        # cr_callnum
+        cell_obj = Mapsheet.cell(row=Rowcount, column=8)
+        a = ROCsheet.cell(row=i, column=654).value
+        ArrayDict[s]['cr_callnum'] = '' #should only show for non BC records
+        cell_obj.value = a
+
+
+        # cr_loctyp
+        cell_obj = Mapsheet.cell(row=Rowcount, column=9)
+        a = ROCsheet.cell(row=i, column=12).value
+        if a == 7:
+            a = 2
+        elif a == 4:
+            a = 7
+        elif a == 3:
+            a = 6
+        elif a == 8:
+            a = 3
+        elif a == 1:
+            a = 4
+        elif a == 2 or a == 6 or a == 9:
+            a = 11
+        # elif a == 5:
+        #     a = 12
+        cell_obj.value = a
+        ArrayDict[s]['cr_loctyp'] = a
+
+        # cr_estageu
+        cell_obj = Mapsheet.cell(row=Rowcount, column=10)
+        a = ROCsheet.cell(row=i, column=9).value  # ageunp
+        if a == 1:
+            a = 0
+        elif a == 2:
+            a = 1
+        elif a == 3:
+            a = 2
+        elif a in ['',None]:
+            a = 3
+        cell_obj.value = a
+        ArrayDict[s]['cr_estageu'] = a
+
+        # cr_estagev
+        cell_obj = Mapsheet.cell(row=Rowcount, column=11)
+        cell_obj.value = ROCsheet.cell(row=i, column=8).value
+        ArrayDict[s]['cr_estagev'] = ROCsheet.cell(row=i, column=8).value
+        # cr_agecat
+        cell_obj = Mapsheet.cell(row=Rowcount, column=12)
+        a = ROCsheet.cell(row=i, column=10).value
+
+        if a == 1:
+            cell_obj.value = 0
+            ArrayDict[s]['cr_agecat'] = 0
+        elif a == 2:
+            cell_obj.value = 1
+            ArrayDict[s]['cr_agecat'] = 1
+        elif a in [3, 4, 5, 6, 7]:
+            cell_obj.value = 2
+            ArrayDict[s]['cr_agecat'] = 2
+        elif a == 8:
+            cell_obj.value = 3
+            ArrayDict[s]['cr_agecat'] = 3
+        # cr_sexp
+        cell_obj = Mapsheet.cell(row=Rowcount, column=13)
+        a = ROCsheet.cell(row=i, column=14).value
+        cell_obj.value = a
+        ArrayDict[s]['cr_sexp'] = a
+        # cr_ptmrcv
+        cell_obj = Mapsheet.cell(row=Rowcount, column=14)
+
+        if ROCsheet.cell(row=i, column=342).value is not None:
+            my_seconds = int(ROCsheet.cell(row=i, column=342).value)
+            my_date = str(ROCsheet.cell(row=i, column=3).value)
+            # print("Mydate")
+            # print(my_date)
+            if my_date is not None:
+                my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
+                ArrayDict[s]['cr_ptmrcv'] = str(addTime(my_date, my_seconds))
+                cell_obj.value = ArrayDict[s]['cr_ptmrcv']
+
+        if 0 <= recordId <= 107:
+            my_date = str(ROCsheet.cell(row=i, column=3).value)
+            my_seconds = ROCsheet.cell(row=i, column=337).value
+            if my_seconds not in ['', '0', 0, None]:
+
+                ptmrcv = addTime2(my_date, my_seconds)
+                ArrayDict[s]['cr_ptmrcv'] = str(ptmrcv)
+                cell_obj.value = ptmrcv
+
+        # cr_rcvcno
+        cell_obj = Mapsheet.cell(row=Rowcount, column=15)
+        if ROCsheet.cell(row=i, column=340).value == 1:
+            cell_obj.value = ROCsheet.cell(row=i, column=340).value
+            ArrayDict[s]['cr_rcvcno___1'] = cell_obj.value
+
+       
+
+        # cr_rig1tm -- need to go over this
+        cell_obj = Mapsheet.cell(row=Rowcount, column=19)
+        # cell_obj.value = ROCsheet.cell(row=i, column=271).value
+        my_date = str(ROCsheet.cell(row=i, column=3).value)
+        if my_date is not None:
+            # print("original date")
+            # print(my_date)
+            my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
+
+            # my_date_added = addTime(my_date, my_seconds1)
+            # print("time added")
+            # print(my_date_added)
+            if ROCsheet.cell(row=i, column=271).value not in ['.', "", None]:
+                my_seconds2 = ROCsheet.cell(row=i, column=271).value
+                my_seconds2 = str(my_seconds2)
+                # print("Check the Myseconds")
+                # print(my_seconds2)
+                # print(len(my_seconds2))
+                if ".000" in my_seconds2:
+                    h, m, sec = my_seconds2.split(':')
+                    h = int(h)
+                    m = int(m)
+                    # print("Seconds2")
+                    # print(h)
+                    # print(m)
+                    # print(sec)
+                    sec = sec.replace(".000", "")
+                    sec = int(sec)
+
+                    dispatchtime = timedelta(hours=h, minutes=m, seconds=sec)
+                    finaldispatchtime = my_date + dispatchtime
+                    ArrayDict[s]['cr_rig1tm'] = str(finaldispatchtime)
+                    cell_obj.value = str(finaldispatchtime)
+                    # print(sec)
+                elif ".000" not in my_seconds2:
+                    h, m, sec = my_seconds2.split(':')
+                    h = int(h)
+                    m = int(m)
+                    sec = int(sec)
+                    # print("Seconds222")
+                    # print(h)
+                    # print(m)
+                    # print(sec)
+                    dispatchtime = timedelta(hours=h, minutes=m, seconds=sec)
+                    finaldispatchtime = my_date + dispatchtime
+                    # print("final dispatch time the hard way")
+                    # print(finaldispatchtime)
+                    ArrayDict[s]['cr_rig1tm'] = str(finaldispatchtime)
+                    cell_obj.value = str(finaldispatchtime)
+
+       
+
+
+        # cr_dspcno
+        cell_obj = Mapsheet.cell(row=Rowcount, column=34)
+        if ROCsheet.cell(row=i, column=348).value == 1:
+            cell_obj.value = ROCsheet.cell(row=i, column=348).value
+            ArrayDict[s]['cr_dspcno___1'] = cell_obj.value
+
+       
+        # print(pyhlt)
+        if cr_disp == 0 and allBlank:
+            cell_obj.value = 0
+            ArrayDict[s]['cr_pdisp'] = 0
+        elif cr_disp == 1 and pyhlt in ['',None]:
+            cell_obj.value = 1
+            ArrayDict[s]['cr_pdisp'] = 1
+        elif cr_disp == 0 and oneNotBlank:
+            cell_obj.value = 2
+            ArrayDict[s]['cr_pdisp'] = 2
+
+
+
+
+        # cr_lftcno
+        cell_obj = Mapsheet.cell(row=Rowcount, column=37)
+        if ROCsheet.cell(row=i, column=460).value == 1:
+            cell_obj.value = ROCsheet.cell(row=i, column=460).value
+            ArrayDict[s]['cr_lftcno___1'] = cell_obj.value
+
+        # cr_ptmeda - come back to this
+        cell_obj = Mapsheet.cell(row=Rowcount, column=38)
+        stm_20 = ROCsheet.cell(row=i, column=471).value
+        rtm_20 = ROCsheet.cell(row=i, column=470).value
+        wtm_20 = ROCsheet.cell(row=i, column=472).value
+
+        my_seconds = checkThreeTimes(stm_20, rtm_20, wtm_20)
+        my_date = str(ROCsheet.cell(row=i, column=3).value)
+        if my_seconds != 0:
+            if my_date is not None:
+                my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
+                ArrayDict[s]['cr_ptmeda'] = str(addTime(my_date, my_seconds))
+                cell_obj.value = ArrayDict[s]['cr_ptmeda']
+
+
+      
+
+        # cr_edacno
+        cell_obj = Mapsheet.cell(row=Rowcount, column=39)
+        if ROCsheet.cell(row=i, column=468).value in [1,'1']:
+            cell_obj.value = ROCsheet.cell(row=i, column=468).value
+            ArrayDict[s]['cr_edacno___1'] = 1
+        # cr_ptmtrm
+        cell_obj = Mapsheet.cell(row=Rowcount, column=40)
+        stm_18 = ROCsheet.cell(row=i, column=455).value
+        rtm_18 = ROCsheet.cell(row=i, column=454).value
+        wtm_18 = ROCsheet.cell(row=i, column=456).value
+
+        my_seconds = checkThreeTimes(stm_18, rtm_18, wtm_18)
+        my_date = str(ROCsheet.cell(row=i, column=3).value)
+        if my_seconds != 0:
+            if my_date is not None:
+                my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
+                ArrayDict[s]['cr_ptmtrm'] = str(addTime(my_date, my_seconds))
+                cell_obj.value = ArrayDict[s]['cr_ptmtrm']
+
+
+        if 0 <= recordId <= 107:
+            my_date = str(ROCsheet.cell(row=i, column=3).value)
+            my_seconds = ROCsheet.cell(row=i, column=449).value
+            if my_seconds not in ['', '0', 0, None]:
+
+                ptmtrm = addTime2(my_date, my_seconds)
+                ArrayDict[s]['cr_ptmtrm'] = str(ptmtrm)
+                cell_obj.value = ptmtrm
+
+
+
+
+        # cr_trmcno
+        cell_obj = Mapsheet.cell(row=Rowcount, column=41)
+        if ROCsheet.cell(row=i, column=452).value == 1:
+            cell_obj.value = ROCsheet.cell(row=i, column=452).value
+            ArrayDict[s]['cr_trmcno___1'] = cell_obj.value
+
+        # cr_witbys
+        cell_obj = Mapsheet.cell(row=Rowcount, column=42)
+        witems = ROCsheet.cell(row=i, column=15).value
+        witbys = ROCsheet.cell(row=i, column=16).value
+        if witbys == 0:
+            cell_obj.value = 0
+            ArrayDict[s]['cr_witbys'] = 0
+        elif witbys == 1:
+            cell_obj.value = 1
+            ArrayDict[s]['cr_witbys'] = 1
+        elif witems == 1:
+            cell_obj.value = 2
+            ArrayDict[s]['cr_witbys'] = 2
+
+        # cr_ptmwar
+        cell_obj = Mapsheet.cell(row=Rowcount, column=43)
+        stm_8 = ROCsheet.cell(row=i, column=399).value
+        rtm_8 = ROCsheet.cell(row=i, column=398).value
+        wtm_8 = ROCsheet.cell(row=i, column=400).value
+
+        my_seconds = checkThreeTimes(stm_8, rtm_8, wtm_8)
+        my_date = str(ROCsheet.cell(row=i, column=3).value)
+        if my_seconds != 0:
+            if my_date is not None:
+                my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
+                ArrayDict[s]['cr_ptmwar'] = str(addTime(my_date, my_seconds))
+                cell_obj.value = ArrayDict[s]['cr_ptmwar']
+
+
+        if 0 <= recordId <= 107:
+            my_date = str(ROCsheet.cell(row=i, column=3).value)
+            my_seconds = ROCsheet.cell(row=i, column=393).value
+            if my_seconds not in ['', '0', 0, None]:
+
+                ptmwar = addTime2(my_date, my_seconds)
+                ArrayDict[s]['cr_ptmwar'] = str(ptmwar)
+                cell_obj.value = ptmwar
+
+
+       
+
+        
+
+        # cr_ccems
+        cell_obj = Mapsheet.cell(row=Rowcount, column=59)
+        cell_obj.value = ROCsheet.cell(row=i, column=32).value
+        ArrayDict[s]['cr_ccems'] = ROCsheet.cell(row=i, column=32).value
+
+        # cr_ptmcpr
+        cell_obj = Mapsheet.cell(row=Rowcount, column=60)
+        ArrayDict[s]['cr_ptmcpr '] = ''
+        stm_5 = ROCsheet.cell(row=i, column=375).value
+        rtm_5 = ROCsheet.cell(row=i, column=374).value
+        wtm_5 = ROCsheet.cell(row=i, column=376).value
+
+        my_seconds = checkThreeTimes(stm_5, rtm_5, wtm_5)
+        my_date = str(ROCsheet.cell(row=i, column=3).value)
+        if my_seconds != 0:
+            if my_date is not None:
+                my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
+                ArrayDict[s]['cr_ptmcpr'] = str(addTime(my_date, my_seconds))
+                cell_obj.value = ArrayDict[s]['cr_ptmcpr']
+
+
+        if 0 <= recordId <= 107:
+            my_date = str(ROCsheet.cell(row=i, column=3).value)
+            my_seconds = ROCsheet.cell(row=i, column=369).value
+            if my_seconds not in ['', '0', 0, None]:
+
+                ptmcpr = addTime2(my_date, my_seconds)
+                ArrayDict[s]['cr_ptmcpr'] = str(ptmcpr)
+                cell_obj.value = ptmcpr
+
+
+        # cr_cprcno
+        cell_obj = Mapsheet.cell(row=Rowcount, column=61)
+        ArrayDict[s]['cr_cprcno___1'] = 0
+        if ROCsheet.cell(row=i, column=372).value in [1, '1'] and rtm_5 in [None,''] \
+                and wtm_5 in [None,''] and stm_5 in [None,'']:
+            cell_obj.value = 1
+            ArrayDict[s]['cr_cprcno___1'] = 1
+        # cr_ccmech
+        cell_obj = Mapsheet.cell(row=Rowcount, column=62)
+        cell_obj.value = ROCsheet.cell(row=i, column=34).value
+        ArrayDict[s]['cr_ccmech'] = ROCsheet.cell(row=i, column=34).value
+
+        # cr_emsshk
+        cell_obj = Mapsheet.cell(row=Rowcount, column=63)
+        emsshk = ROCsheet.cell(row=i, column=82).value
+        if emsshk in [0,'0',None,'']:
+            ArrayDict[s]['cr_emsshk'] = 0
+            cell_obj.value = 0
+        elif emsshk in [1,'1']:
+            ArrayDict[s]['cr_emsshk'] = 1
+            cell_obj.value =1
+        # cr_ptmshk --need to come back to this
+        cell_obj = Mapsheet.cell(row=Rowcount, column=64)
+        stm_15 = ROCsheet.cell(row=i, column=431).value
+        rtm_15 = ROCsheet.cell(row=i, column=430).value
+        wtm_15 = ROCsheet.cell(row=i, column=432).value
+
+        my_seconds = checkThreeTimes(stm_15, rtm_15, wtm_15)
+        my_seconds = try_parse_int(my_seconds)
+        my_date = str(ROCsheet.cell(row=i, column=3).value)
+        if my_seconds != 0:
+            if my_date is not None:
+                my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
+                ArrayDict[s]['cr_ptmshk '] = str(addTime(my_date, my_seconds))
+                cell_obj.value = ArrayDict[s]['cr_ptmshk ']
+
+
+        if 0 <= recordId <= 107:
+            my_date = str(ROCsheet.cell(row=i, column=3).value)
+            my_seconds = ROCsheet.cell(row=i, column=425).value
+            if my_seconds not in ['', '0', 0, None]:
+
+                ptmshk = addTime2(my_date, my_seconds)
+                ArrayDict[s]['cr_ptmshk'] = str(ptmshk)
+                cell_obj.value = ptmshk
+
+
+        # cr_shkcno
+        cell_obj = Mapsheet.cell(row=Rowcount, column=65)
+        if ROCsheet.cell(row=i, column=428).value in [1, "1"]:
+            cell_obj.value = ROCsheet.cell(row=i, column=428).value
+            ArrayDict[s]['cr_shkcno___1	'] = ROCsheet.cell(row=i, column=428).value
+        # cr_numshk
+        cell_obj = Mapsheet.cell(row=Rowcount, column=66)
+        if ROCsheet.cell(row=i, column=83).value not in ['0', 0]:
+            cell_obj.value = ROCsheet.cell(row=i, column=83).value
+            ArrayDict[s]['cr_numshk'] = ROCsheet.cell(row=i, column=83).value
+        # cr_jls1
+        cell_obj = Mapsheet.cell(row=Rowcount, column=67)
+        if ROCsheet.cell(row=i, column=316).value not in ['.', '']:
+            ArrayDict[s]['cr_jls1'] = ROCsheet.cell(row=i, column=316).value
+            cell_obj.value = ROCsheet.cell(row=i, column=316).value
+        # cr_jls1cno
+        cell_obj = Mapsheet.cell(row=Rowcount, column=68)
+        if ROCsheet.cell(row=i, column=317).value in [1, "1"]:
+            cell_obj.value = ROCsheet.cell(row=i, column=317).value
+            ArrayDict[s]['cr_jls1_na___1'] = ROCsheet.cell(row=i, column=317).value
+        # cr_jls2
+        cell_obj = Mapsheet.cell(row=Rowcount, column=69)
+
+        if ROCsheet.cell(row=i, column=323).value not in ['.', '']:
+            cell_obj.value = ROCsheet.cell(row=i, column=323).value
+            ArrayDict[s]['cr_jls2'] = ROCsheet.cell(row=i, column=323).value
+        # cr_jls2cno
+        cell_obj = Mapsheet.cell(row=Rowcount, column=70)
+        if ROCsheet.cell(row=i, column=324).value in [1, "1"]:
+            cell_obj.value = ROCsheet.cell(row=i, column=324).value
+            ArrayDict[s]['cr_jls2_na___1'] = ROCsheet.cell(row=i, column=324).value
+        # cr_jls3
+        cell_obj = Mapsheet.cell(row=Rowcount, column=71)
+        if ROCsheet.cell(row=i, column=330).value not in ['.', '']:
+            ArrayDict[s]['cr_jls3'] = ROCsheet.cell(row=i, column=330).value
+            cell_obj.value = ROCsheet.cell(row=i, column=330).value
+        # cr_jls3cno
+        cell_obj = Mapsheet.cell(row=Rowcount, column=72)
+        if ROCsheet.cell(row=i, column=331).value in [1, "1"]:
+            cell_obj.value = ROCsheet.cell(row=i, column=331).value
+            ArrayDict[s]['cr_jls3_na___1'] = ROCsheet.cell(row=i, column=331).value
+
+        # cr_attncbls - come back to this
+        ArrayDict[s]['cr_attncbls'] = ''
+        cell_obj = Mapsheet.cell(row=Rowcount, column=73)
+        attcabl_1 = ROCsheet.cell(row=i, column=320).value
+        attcabl_2 = ROCsheet.cell(row=i, column=327).value
+        attcabl_3 = ROCsheet.cell(row=i, column=335).value
+        if attcabl_1 in [0, '0'] and attcabl_2 in [0, '0'] and attcabl_3 in [0, '0']:
+            cell_obj.value = 0
+            ArrayDict[s]['cr_attncbls'] = 0
+        if attcabl_1 in [1, '1'] or attcabl_2 in [1, '1'] or attcabl_3 in [1, '1']:
+            cell_obj.value = 1
+            ArrayDict[s]['cr_attncbls'] = 1
+        if attcabl_1 in [9, '9'] and attcabl_2 in [9, '9'] and attcabl_3 in [9, '9']:
+            cell_obj.value = 2
+            ArrayDict[s]['cr_attncbls'] = 2
+
+        # cr_bvmatt
+        cell_obj = Mapsheet.cell(row=Rowcount, column=74)
+        cell_obj.value = ROCsheet.cell(row=i, column=35).value
+        ArrayDict[s]['cr_bvmatt___1'] = ROCsheet.cell(row=i, column=35).value
+        ArrayDict[s]['cr_bvmsuc___1'] = ROCsheet.cell(row=i, column=35).value # set BVMSuc successful as well
+
+        # cr_ivatt
+        cell_obj = Mapsheet.cell(row=Rowcount, column=75)
+        cell_obj.value = ROCsheet.cell(row=i, column=59).value
+        ArrayDict[s]['cr_ivatt___1'] = ROCsheet.cell(row=i, column=59).value
+        # cr_ivsuc
+        cell_obj = Mapsheet.cell(row=Rowcount, column=76)
+        cell_obj.value = ROCsheet.cell(row=i, column=60).value
+        ArrayDict[s]['cr_ivsuc___1'] = ROCsheet.cell(row=i, column=60).value
+        # cr_ioatt___1
+        cell_obj = Mapsheet.cell(row=Rowcount, column=77)
+        cell_obj.value = ROCsheet.cell(row=i, column=61).value
+        ArrayDict[s]['cr_ioatt___1'] = ROCsheet.cell(row=i, column=61).value
+        # cr_iosuc___1
+        cell_obj = Mapsheet.cell(row=Rowcount, column=78)
+        cell_obj.value = ROCsheet.cell(row=i, column=62).value
+        ArrayDict[s]['cr_iosuc___1'] = ROCsheet.cell(row=i, column=62).value
+        # cr_lmaatt___1
+        cell_obj = Mapsheet.cell(row=Rowcount, column=79)
+        cell_obj.value = ROCsheet.cell(row=i, column=770).value
+        ArrayDict[s]['cr_lmaatt___1'] = ROCsheet.cell(row=i, column=770).value
+        # cr_lmasuc___1
+        cell_obj = Mapsheet.cell(row=Rowcount, column=80)
+        cell_obj.value = ROCsheet.cell(row=i, column=771).value
+        ArrayDict[s]['cr_lmasuc___1'] = ROCsheet.cell(row=i, column=771).value
+
+        # cr_lmatm
+
+        ArrayDict[s]['cr_lmatm'] = ''
+        condition_met = True
+        notime_check = True
+        cell_obj = Mapsheet.cell(row=Rowcount, column=81)
+
+        stm_21 = ROCsheet.cell(row=i, column=479).value
+        rtm_21 = ROCsheet.cell(row=i, column=478).value
+        wtm_21 = ROCsheet.cell(row=i, column=480).value
+        adj_21 = ROCsheet.cell(row=i, column=473).value
+
+
+        
+
+        # cr_ettcno
+        ArrayDict[s]['cr_ettcno___1'] = ''
+        cell_obj = Mapsheet.cell(row=Rowcount, column=90)
+        tm_check = False
+        if rtm_21 in [0, '0', None, ''] and stm_21 in [0, '0', None, ''] and wtm_21 in [0, '0', None, ''] and adj_21  in [0, '0', None, '']:
+            tm_check = True
+        if condition_met is True and (oetsuc == 1 or netsuc == 1) and tm_check is True:
+            ArrayDict[s]['cr_ettcno___1'] = 1
+            cell_obj.value = 1
+
+        # cr_othawatt
+        cell_obj = Mapsheet.cell(row=Rowcount, column=91)
+        othair = ROCsheet.cell(row=i, column=53).value
+        comtub = ROCsheet.cell(row=i, column=760).value
+        eoa = ROCsheet.cell(row=i, column=763).value
+        igel = ROCsheet.cell(row=i, column=43).value
+        salt = ROCsheet.cell(row=i, column=51).value
+
+        if othair in [1, '1'] or comtub in [1, '1'] or eoa in [1, '1'] or igel in [1, '1'] or salt in [1, '1']:
+            cell_obj.value = 1
+            ArrayDict[s]['cr_othawatt___1'] = 1
+
+        # cr_othawsuc
+        first_condition = False
+        second_condition = False
+        cell_obj = Mapsheet.cell(row=Rowcount, column=92)
+
+        oasucc = ROCsheet.cell(row=i, column=776).value
+        comsuc = ROCsheet.cell(row=i, column=761).value
+        eoasuc = ROCsheet.cell(row=i, column=764).value
+        iglsuc = ROCsheet.cell(row=i, column=44).value
+        crisuc = ROCsheet.cell(row=i, column=56).value
+
+        if oasucc in [1, '1'] or comsuc in [1, '1'] or eoasuc in [1, '1'] or iglsuc in [1, '1'] or crisuc in [1, '1']:
+            first_condition = True
+
+        oetsuc = ROCsheet.cell(row=i, column=39).value
+        netsuc = ROCsheet.cell(row=i, column=41).value
+        ltsuc = ROCsheet.cell(row=i, column=46).value
+        ltdsuc = ROCsheet.cell(row=i, column=48).value
+        ltssuc = ROCsheet.cell(row=i, column=50).value
+        lmassuc = ROCsheet.cell(row=i, column=771).value
+
+        oetsuc, netsuc, ltsuc, ltdsuc, ltssuc, lmassuc
+        if oetsuc in [0, '0', None, ''] and netsuc in [0, '0', None, ''] and ltsuc in [0, '0', None, ''] \
+                and ltdsuc in [0,'0',None,''] and ltssuc in [0, '0', None, ''] and lmassuc in [0, '0', None, '']:
+            second_condition = True
+
+        ArrayDict[s]['cr_othawsuc___1'] = 0
+        if first_condition and second_condition:
+            ArrayDict[s]['cr_othawsuc___1'] = 1
+
+
+       
+
+        # cr_trandate2
+        cell_obj = Mapsheet.cell(row=Rowcount, column=125)
+        cell_obj.value = ROCsheet.cell(row=i, column=488).value
+        ArrayDict[s]['cr_trandate2'] = ROCsheet.cell(row=i, column=488).value
+
+        # cr_trans3
+        cell_obj = Mapsheet.cell(row=Rowcount, column=126)
+        IntValue = try_parse_int(ROCsheet.cell(row=i, column=489).value)
+        if IntValue  != 0:
+            cell_obj.value = 1
+            ArrayDict[s]['cr_trans3___1'] = 1
+
+       
+
+        # Mark all the forms as complete
+
+        ArrayDict[s]['enrollment_complete'] = 2
+        ArrayDict[s]['call_identifiers_complete'] = 2
+        ArrayDict[s]['ems_fire_response_complete'] = 2
+        ArrayDict[s]['cardiac_arrest_info_complete'] = 2
+        ArrayDict[s]['prehospital_interventions_complete'] = 2
+        ArrayDict[s]['cpr_process_complete'] = 2
+        ArrayDict[s]['final_vital_status_complete'] = 2
+
+
+
+        # Reset everything
+
+        # ArrayDict[s]['cr_tx'] = ''
+        #
+        # ArrayDict[s]['cr_epdt'] = ''
+        #
+        # ArrayDict[s]['cr_utmeast'] = ''
+       
+        Rowcount = Rowcount + 1
+
+        if Rowcount % 1000 == 0:
+            print ("Creating datastructure ...")
+        s = s + 1
+    # print(ArrayDict)
+    response = project.import_records(ArrayDict, overwrite='overwrite', format='json')
+    print(response)
+    workbook.save(filename=fname)
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+
