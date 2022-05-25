@@ -1,0 +1,24 @@
+
+from redcap import Project
+
+
+
+URL = 'https://redcap.xxxxxxxx/api/'
+# API_KEY = 'XXXXXXXXXXXXXXXXXXXXX'
+
+project = Project(URL, API_KEY)
+
+
+thislist =[]
+
+
+for i in range(41591, 43581):
+   recordid = str(i)+'XXX' #create record_id
+   thislist.append(recordid)
+
+
+
+response = project.delete_records(thislist)
+
+
+
