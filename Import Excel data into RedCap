@@ -2,777 +2,389 @@ import pandas as pd
 import json
 from openpyxl import load_workbook
 from redcap import Project, RedcapError
-from openpyxl import Workbook
-from redcap import Project, RedcapError
-from datetime import datetime
-from datetime import timedelta
+from smtplib import SMTP
+from contextlib import contextmanager
+import sys
+import gc
+from ratelimit import limits,sleep_and_retry
+import os, shutil
 
-URL = 'https://redcap.****yoururl**/redcap/api/'
-# API_KEY = ''
-API_KEY = ''
+
+URL = ''
+
+#API_KEY = ''  #TEST SITE
+API_KEY = ''  #LIVE SITE
 project = Project(URL, API_KEY)
+chunk_size = 50
+
+SexList = ['Male', 'Female', 'Unknown']
+
+cityIndex = ''
+
+city_dict = {
+
+"Aurora":"4",
+"AURORA T":"4",
+"BRADFORD-W G T":"8",
+"BRAMPTON C":"9",
+"BROCK TP":"11",
+"caledon":"13",
+"CALEDON T":"13",
+"E GWILLIMBURY T":"20",
+"East Gwillimbury":"20",
+"ELDON TP":"",
+"Georgina":"24",
+"GEORGINA T":"24",
+"Holland Landing":"20",
+"Jackson's Point":"24",
+"Keswick":"24",
+"King":"32",
+"KING TP":"32",
+"Markham":"35",
+"MARKHAM C":"35",
+"NEW TECUMSETH T":"41",
+"Newmarket":"42",
+"NEWMARKET T":"42",
+"PICKERING T":"55",
+"RAMARA TP":"58",
+"Richmond Hill":"59",
+"RICHMOND HILL T":"59",
+"Sutton":"24",
+"Thornhill":"72",
+"69, Toronto ET C":"69",
+"69, Toronto NY C":"69",
+"69, Toronto SC C":"69",
+"Unionville":"35",
+"UXBRIDGE TP":"71",
+"Vaughan":"72",
+"VAUGHAN C":"72",
+"Whitchurch - Stouffville":"78",
+"WHITCHURCH-S T":"78",
+"Woodbridge":"72"
+
+}
+
+HouseDict = {
+    "A" : 8,
+    'B' :1,
+    'C':7,
+    'D':2,
+    'E':2,
+    'F':7,
+    'G':10,
+    'H':2,
+    'I':5,
+    'J':3,
+    'K':11,
+    'L':10,
+    'M':7,
+    'N':3,
+    'O':10,
+    'P':6,
+    'Q':10,
+    'R':0,
+    'S':4,
+    'T':11,
+    'U':3,
+    'V':6,
+    'W':11,
+    'X':5,
+    'Y':9,
+    'Z':''
+}
+
+hospital_dict = {
+
+"Headwaters Health Care Centre" : "0",
+"Humber River Regional (Wilson Site)" : "10 ",
+"Mackenzie Health (Richmond Hill Site)" : "11 ",
+"Cortellucci Vaughan Hospital" : "17 ",
+"Markham Stouffville Hospital (Markham Site)" : "18 ",
+"Markham Stouffville Hospital (Uxbridge Site)" : "19 ",
+"North York General" : "20 ",
+"Soldiers Memorial Hospital" : "26 ",
+"Birchmount Hospital (Scarborough Health Network)" : "27 ",
+"Centenary Hospital - Scarborough Health Network" : "30 ",
+"Centenary (Cath Lab) - Scarborough Health Network" : "31 ",
+"Southlake Regional Health Centre" : "31 ",
+"Southlake Regional (Cath. Lab)" : "33 ",
+"St. Michael's Hospital" : "33 ",
+"Stevenson Memorial Hospital (Alliston)" : "36 ",
+"Sunnybrook Health Sciences" : "37 ",
+"Sunnybrook Health Sciences (Cath Lab)" : "38 ",
+"Hospital for Sick Children" : "38 ",
+"Toronto General Hospital" : "39 ",
+"Toronto Western Hospital" : "43 ",
+"Brampton Civic - William Osler Health System" : "44 ",
+"Brampton Civic (Cath Lab) - William Osler Health" : "46 ",
+"Etobicoke General - William Osler Health System" : "46 ",
 
 
 
-def try_parse_int(s, base=10, val=None):
+
+}
+
+
+
+
+def categorize_age(days):
+    if pd.isna(days):
+        return "3" #"CNO"  # If age can't be determined
+    years = days // 365
+    if years >= 3:
+        return "0" # "Years"  # Age 3 years or greater
+    elif days > 30:
+        return "1" #"Months"  # Age > 30 days but < 3 years
+    else:
+        return "2" #"Days"  # Age 30 days or less
+
+def walklevel(path, depth = 1):
+    """It works just like os.walk, but you can pass it a level parameter
+       that indicates how deep the recursion will go.
+       If depth is 1, the current directory is listed.
+       If depth is 0, nothing is returned.
+       If depth is -1 (or less than 0), the full depth is walked.
+    """
+    # If depth is negative, just walk
+    # Not using yield from for python2 compat
+    # and copy dirs to keep consistant behavior for depth = -1 and depth = inf
+    if depth < 0:
+        for root, dirs, files in os.walk(path):
+            yield root, dirs[:], files
+        return
+    elif depth == 0:
+        return
+
+    # path.count(os.path.sep) is safe because
+    # - On Windows "\\" is never allowed in the name of a file or directory
+    # - On UNIX "/" is never allowed in the name of a file or directory
+    # - On MacOS a literal "/" is quitely translated to a ":" so it is still
+    #   safe to count "/".
+    base_depth = path.rstrip(os.path.sep).count(os.path.sep)
+    for root, dirs, files in os.walk(path):
+        yield root, dirs[:], files
+        cur_depth = root.count(os.path.sep)
+        if base_depth + depth <= cur_depth:
+            del dirs[:]
+
+@contextmanager
+def network_share_auth(share, username=None, password=None, drive_letter='F'):
+    """Context manager that mounts the given share using the given
+    username and password to the given drive letter when entering
+    the context and unmounts it when exiting."""
+    os.system("NET USE %s: /DELETE" % drive_letter)
+    cmd_parts = ["NET USE %s: %s" % (drive_letter, share)]
+    if password:
+        cmd_parts.append(password)
+    if username:
+        cmd_parts.append("/USER:%s" % username)
+    os.system(" ".join(cmd_parts))
     try:
-        s = str(s)
-        return int(s, base)
-    except ValueError:
-        val = 0
-        return val
-
-#Jus a method to format the date. 
-def dateFormat(a):
-    my_date = datetime.strptime(a, "%Y-%m-%d %H:%M:%S")
-    my_date = my_date.date()
-    return my_date
-
-def mapRsnstp(val):
-    interim_val = ''
-
-    if val in [1, '1']:
-        interim_val = 0
-    elif val in [3, '3']:
-        interim_val = 2
-    elif val in [6, '6',14,'14']:
-        interim_val = 4
-    elif val in [12, '12']:
-        interim_val = 6
-    elif val in [13, '13']:
-        interim_val = 7
-    elif val in [10 ,'10']:
-        interim_val= 8
-    elif val in [8, '8', 9,'9']:
-        interim_val = 5
-    return interim_val
-
-
-#adding a time delta to some date
-def addTime(some_date, some_seconds):
-    if some_seconds is None:
-        some_seconds = 0
-        # print("Mydate")
-    # print(my_date)
-    if some_date is not None:
-        some_date = str(some_date)
-        some_date = datetime.strptime(some_date, "%Y-%m-%d %H:%M:%S")
-        # print("time")
-        # print(my_date)
-        some_date = some_date + timedelta(seconds=some_seconds)
-        # print("time added")
-        # print(my_date)
-        return some_date
-
-# Weird stopwatch format for time that needed foratting before i added it to aother date
-def addTime2(some_date, some_seconds):
-    if some_date is not None:
-        # print("original date")
-        # print(my_date)
-        some_date = datetime.strptime(some_date, "%Y-%m-%d %H:%M:%S")
-
-        if some_seconds not in ['0','1',0,'.', "", None]:
-            some_seconds = str(some_seconds)
-            # print("Check the Myseconds")
-            # print(some_seconds)
-            # print(len(some_seconds))
-            if ".000" in some_seconds:
-                h, m, sec = some_seconds.split(':')
-                h = int(h)
-                m = int(m)
-
-                sec = sec.replace(".000", "")
-                sec = int(sec)
-
-                dispatchtime = timedelta(hours=h, minutes=m, seconds=sec)
-                some_date = some_date + dispatchtime
-
-                # print(sec)
-            elif ".000" not in some_seconds and ":" in some_seconds:
-                h, m, sec = some_seconds.split(':')
-                h = int(h)
-                m = int(m)
-
-                sec = int(sec)
-
-
-                dispatchtime = timedelta(hours=h, minutes=m, seconds=sec)
-                some_date = some_date + dispatchtime
-                # print("final dispatch time the hard way")
-                # print(finaldispatchtime)
-    return some_date
-
-
-def checkThreeTimes(stm, rtm, wtm):
-    ReturnTime = 0
-    if stm not in [None, '']:
-        ReturnTime = stm
-    elif stm in [None, ''] and rtm not in [None, '']:
-        ReturnTime = rtm
-    elif stm in [None, ''] and rtm in [None, ''] and wtm not in [None, '']:
-        ReturnTime = wtm
-    return ReturnTime
-
-
-
-
-
+        yield
+    finally:
+        os.system("NET USE %s: /DELETE" % drive_letter)
 
-def main():
-    ROCworkbook = load_workbook(filename=")
-    #TestWorkbook = load_workbook(filename="//****.xlsx")
-    # print(ROCworkbook.sheetnames)
-    ROCsheet = ROCworkbook.active
-    max_row = ROCsheet.max_row
-    fname = "*****.xlsx"
-    workbook = Workbook()
-    Mapsheet = workbook.active
-    ArrayDict = [] # This is my List , that will conatin one dictionary of values per row.
-
-    CanRocDD = pd.read_excel(r'****.xlsx',
-                             header=1, usecols="A,E")
-    # CanRocDD.info()
-    pd.set_option("max_rows", None)
-    CanRocDD = CanRocDD.dropna(subset=['Variable ID'])
-    CanRocDD = CanRocDD.dropna(subset=['BC ID'])
-
-   
-
-    col_one_list = CanRocDD['Variable ID'].tolist()
-
-    # Put the column names in the Mapped Excel Sheet
-    length = len(col_one_list)
-    for i in range(0, length):
-        if i == 0:
-            a = Mapsheet.cell(row=1, column=1)
-            a.value = col_one_list[i]
-            # print("The first value is" + a.value)
-        else:
-            a = Mapsheet.cell(row=1, column=i + 1)
-            a.value = col_one_list[i]
-    # workbook.save(filename=fname)
-
-    Rowcount = 2
-    s = 0
-    for i in range(5, max_row + 1):
-        # loop the excel sheet, row by row and map the values to another excel sheet. Also create a Doctionary Object wth each loop and add to ArrayDic 
-        a = ROCsheet.cell(row=i, column=2).value
-      
-        if a is None:
-            continue   # skip rows in the Exel sheet where the first row that contains the record ID is blank
-       
-        ArrayDictRow = {}
-        ArrayDict.append(ArrayDictRow) # first row (Dictionary) 
-
-        ArrayDict[s]['redcap_data_access_group'] = "**"  #This is the format for acessing the fields in RedCap. 
-        
-        # cr_record_id
-        cell_obj = Mapsheet.cell(row=Rowcount, column=1) # Also  creating an excel sheet with the mapped values. 
-        cell_obj.value = a
-        ArrayDict[s]['cr_record_id'] = str(a)
-
-        # CR_TX
-        cell_obj = Mapsheet.cell(row=Rowcount, column=2)
-        cell_obj.value = ROCsheet.cell(row=i, column=5).value
-        ArrayDict[s]['cr_tx'] = ROCsheet.cell(row=i, column=5).value
-        recordId = int(a)
-        if 0 <= recordId <= 107:
-            ArrayDict[s]['cr_tx'] = 1
-            cell_obj.value = 1
-
-            # CR_EPDT
-        cell_obj = Mapsheet.cell(row=Rowcount, column=3)
-        a = ROCsheet.cell(row=i, column=3).value
-        if a is not None:
-            cell_obj.value = dateFormat(str(a))
-            ArrayDict[s]['cr_epdt'] = str(cell_obj.value)
-        elif a is None:
-            ArrayDict[s]['cr_epdt'] = ""
-
-        # CR_LAT
-        cell_obj = Mapsheet.cell(row=Rowcount, column=4)
-        a = ROCsheet.cell(row=i, column=6).value
-        if a != '' and a is not None:
-            if type(a) == str:
-                a = float(a)
-            cell_obj.value = a
-            ArrayDict[s]['cr_lat'] = format(a, ".3f")
-
-        # CR_LONG
-        cell_obj = Mapsheet.cell(row=Rowcount, column=5)
-        a = ROCsheet.cell(row=i, column=7).value
-        if  a != '' and a is not None:
-            if type(a) == str:
-                if a.endswith('.') or a.endswith("'") or a.endswith("`"):
-                    a = a[:-1] #removed last character
-                    a = float(a)
-            cell_obj.value = a
-
-            a = float(a)
-            ArrayDict[s]['cr_long'] = format(a, ".3f")
-
-        # crdatum
-        cell_obj = Mapsheet.cell(row=Rowcount, column=6)
-        a = ROCsheet.cell(row=i, column=666).value
-        cell_obj.value = a
-        ArrayDict[s]['cr_datum'] = a
-
-        # cr_unknowngeo
-        cell_obj = Mapsheet.cell(row=Rowcount, column=7)
-        a = ROCsheet.cell(row=i, column=657).value
-        if a in [3, '3']:
-            cell_obj.value = 0
-            ArrayDict[s]['cr_unknowngeo___1'] = 0 
-
-        # cr_callnum
-        cell_obj = Mapsheet.cell(row=Rowcount, column=8)
-        a = ROCsheet.cell(row=i, column=654).value
-        ArrayDict[s]['cr_callnum'] = '' #should only show for non BC records
-        cell_obj.value = a
-
-
-        # cr_loctyp
-        cell_obj = Mapsheet.cell(row=Rowcount, column=9)
-        a = ROCsheet.cell(row=i, column=12).value
-        if a == 7:
-            a = 2
-        elif a == 4:
-            a = 7
-        elif a == 3:
-            a = 6
-        elif a == 8:
-            a = 3
-        elif a == 1:
-            a = 4
-        elif a == 2 or a == 6 or a == 9:
-            a = 11
-        # elif a == 5:
-        #     a = 12
-        cell_obj.value = a
-        ArrayDict[s]['cr_loctyp'] = a
-
-        # cr_estageu
-        cell_obj = Mapsheet.cell(row=Rowcount, column=10)
-        a = ROCsheet.cell(row=i, column=9).value  # ageunp
-        if a == 1:
-            a = 0
-        elif a == 2:
-            a = 1
-        elif a == 3:
-            a = 2
-        elif a in ['',None]:
-            a = 3
-        cell_obj.value = a
-        ArrayDict[s]['cr_estageu'] = a
-
-        # cr_estagev
-        cell_obj = Mapsheet.cell(row=Rowcount, column=11)
-        cell_obj.value = ROCsheet.cell(row=i, column=8).value
-        ArrayDict[s]['cr_estagev'] = ROCsheet.cell(row=i, column=8).value
-        # cr_agecat
-        cell_obj = Mapsheet.cell(row=Rowcount, column=12)
-        a = ROCsheet.cell(row=i, column=10).value
-
-        if a == 1:
-            cell_obj.value = 0
-            ArrayDict[s]['cr_agecat'] = 0
-        elif a == 2:
-            cell_obj.value = 1
-            ArrayDict[s]['cr_agecat'] = 1
-        elif a in [3, 4, 5, 6, 7]:
-            cell_obj.value = 2
-            ArrayDict[s]['cr_agecat'] = 2
-        elif a == 8:
-            cell_obj.value = 3
-            ArrayDict[s]['cr_agecat'] = 3
-        # cr_sexp
-        cell_obj = Mapsheet.cell(row=Rowcount, column=13)
-        a = ROCsheet.cell(row=i, column=14).value
-        cell_obj.value = a
-        ArrayDict[s]['cr_sexp'] = a
-        # cr_ptmrcv
-        cell_obj = Mapsheet.cell(row=Rowcount, column=14)
-
-        if ROCsheet.cell(row=i, column=342).value is not None:
-            my_seconds = int(ROCsheet.cell(row=i, column=342).value)
-            my_date = str(ROCsheet.cell(row=i, column=3).value)
-            # print("Mydate")
-            # print(my_date)
-            if my_date is not None:
-                my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
-                ArrayDict[s]['cr_ptmrcv'] = str(addTime(my_date, my_seconds))
-                cell_obj.value = ArrayDict[s]['cr_ptmrcv']
-
-        if 0 <= recordId <= 107:
-            my_date = str(ROCsheet.cell(row=i, column=3).value)
-            my_seconds = ROCsheet.cell(row=i, column=337).value
-            if my_seconds not in ['', '0', 0, None]:
-
-                ptmrcv = addTime2(my_date, my_seconds)
-                ArrayDict[s]['cr_ptmrcv'] = str(ptmrcv)
-                cell_obj.value = ptmrcv
-
-        # cr_rcvcno
-        cell_obj = Mapsheet.cell(row=Rowcount, column=15)
-        if ROCsheet.cell(row=i, column=340).value == 1:
-            cell_obj.value = ROCsheet.cell(row=i, column=340).value
-            ArrayDict[s]['cr_rcvcno___1'] = cell_obj.value
-
-       
-
-        # cr_rig1tm -- need to go over this
-        cell_obj = Mapsheet.cell(row=Rowcount, column=19)
-        # cell_obj.value = ROCsheet.cell(row=i, column=271).value
-        my_date = str(ROCsheet.cell(row=i, column=3).value)
-        if my_date is not None:
-            # print("original date")
-            # print(my_date)
-            my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
-
-            # my_date_added = addTime(my_date, my_seconds1)
-            # print("time added")
-            # print(my_date_added)
-            if ROCsheet.cell(row=i, column=271).value not in ['.', "", None]:
-                my_seconds2 = ROCsheet.cell(row=i, column=271).value
-                my_seconds2 = str(my_seconds2)
-                # print("Check the Myseconds")
-                # print(my_seconds2)
-                # print(len(my_seconds2))
-                if ".000" in my_seconds2:
-                    h, m, sec = my_seconds2.split(':')
-                    h = int(h)
-                    m = int(m)
-                    # print("Seconds2")
-                    # print(h)
-                    # print(m)
-                    # print(sec)
-                    sec = sec.replace(".000", "")
-                    sec = int(sec)
-
-                    dispatchtime = timedelta(hours=h, minutes=m, seconds=sec)
-                    finaldispatchtime = my_date + dispatchtime
-                    ArrayDict[s]['cr_rig1tm'] = str(finaldispatchtime)
-                    cell_obj.value = str(finaldispatchtime)
-                    # print(sec)
-                elif ".000" not in my_seconds2:
-                    h, m, sec = my_seconds2.split(':')
-                    h = int(h)
-                    m = int(m)
-                    sec = int(sec)
-                    # print("Seconds222")
-                    # print(h)
-                    # print(m)
-                    # print(sec)
-                    dispatchtime = timedelta(hours=h, minutes=m, seconds=sec)
-                    finaldispatchtime = my_date + dispatchtime
-                    # print("final dispatch time the hard way")
-                    # print(finaldispatchtime)
-                    ArrayDict[s]['cr_rig1tm'] = str(finaldispatchtime)
-                    cell_obj.value = str(finaldispatchtime)
-
-       
-
-
-        # cr_dspcno
-        cell_obj = Mapsheet.cell(row=Rowcount, column=34)
-        if ROCsheet.cell(row=i, column=348).value == 1:
-            cell_obj.value = ROCsheet.cell(row=i, column=348).value
-            ArrayDict[s]['cr_dspcno___1'] = cell_obj.value
-
-       
-        # print(pyhlt)
-        if cr_disp == 0 and allBlank:
-            cell_obj.value = 0
-            ArrayDict[s]['cr_pdisp'] = 0
-        elif cr_disp == 1 and pyhlt in ['',None]:
-            cell_obj.value = 1
-            ArrayDict[s]['cr_pdisp'] = 1
-        elif cr_disp == 0 and oneNotBlank:
-            cell_obj.value = 2
-            ArrayDict[s]['cr_pdisp'] = 2
-
-
-
-
-        # cr_lftcno
-        cell_obj = Mapsheet.cell(row=Rowcount, column=37)
-        if ROCsheet.cell(row=i, column=460).value == 1:
-            cell_obj.value = ROCsheet.cell(row=i, column=460).value
-            ArrayDict[s]['cr_lftcno___1'] = cell_obj.value
-
-        # cr_ptmeda - come back to this
-        cell_obj = Mapsheet.cell(row=Rowcount, column=38)
-        stm_20 = ROCsheet.cell(row=i, column=471).value
-        rtm_20 = ROCsheet.cell(row=i, column=470).value
-        wtm_20 = ROCsheet.cell(row=i, column=472).value
-
-        my_seconds = checkThreeTimes(stm_20, rtm_20, wtm_20)
-        my_date = str(ROCsheet.cell(row=i, column=3).value)
-        if my_seconds != 0:
-            if my_date is not None:
-                my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
-                ArrayDict[s]['cr_ptmeda'] = str(addTime(my_date, my_seconds))
-                cell_obj.value = ArrayDict[s]['cr_ptmeda']
-
-
-      
-
-        # cr_edacno
-        cell_obj = Mapsheet.cell(row=Rowcount, column=39)
-        if ROCsheet.cell(row=i, column=468).value in [1,'1']:
-            cell_obj.value = ROCsheet.cell(row=i, column=468).value
-            ArrayDict[s]['cr_edacno___1'] = 1
-        # cr_ptmtrm
-        cell_obj = Mapsheet.cell(row=Rowcount, column=40)
-        stm_18 = ROCsheet.cell(row=i, column=455).value
-        rtm_18 = ROCsheet.cell(row=i, column=454).value
-        wtm_18 = ROCsheet.cell(row=i, column=456).value
-
-        my_seconds = checkThreeTimes(stm_18, rtm_18, wtm_18)
-        my_date = str(ROCsheet.cell(row=i, column=3).value)
-        if my_seconds != 0:
-            if my_date is not None:
-                my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
-                ArrayDict[s]['cr_ptmtrm'] = str(addTime(my_date, my_seconds))
-                cell_obj.value = ArrayDict[s]['cr_ptmtrm']
-
-
-
-
-
-        # cr_trmcno
-        cell_obj = Mapsheet.cell(row=Rowcount, column=41)
-        if ROCsheet.cell(row=i, column=452).value == 1:
-            cell_obj.value = ROCsheet.cell(row=i, column=452).value
-            ArrayDict[s]['cr_trmcno___1'] = cell_obj.value
-
-        # cr_witbys
-        cell_obj = Mapsheet.cell(row=Rowcount, column=42)
-        witems = ROCsheet.cell(row=i, column=15).value
-        witbys = ROCsheet.cell(row=i, column=16).value
-        if witbys == 0:
-            cell_obj.value = 0
-            ArrayDict[s]['cr_witbys'] = 0
-        elif witbys == 1:
-            cell_obj.value = 1
-            ArrayDict[s]['cr_witbys'] = 1
-        elif witems == 1:
-            cell_obj.value = 2
-            ArrayDict[s]['cr_witbys'] = 2
-
-        # cr_ptmwar
-        cell_obj = Mapsheet.cell(row=Rowcount, column=43)
-        stm_8 = ROCsheet.cell(row=i, column=399).value
-        rtm_8 = ROCsheet.cell(row=i, column=398).value
-        wtm_8 = ROCsheet.cell(row=i, column=400).value
-
-        my_seconds = checkThreeTimes(stm_8, rtm_8, wtm_8)
-        my_date = str(ROCsheet.cell(row=i, column=3).value)
-        if my_seconds != 0:
-            if my_date is not None:
-                my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
-                ArrayDict[s]['cr_ptmwar'] = str(addTime(my_date, my_seconds))
-                cell_obj.value = ArrayDict[s]['cr_ptmwar']
-
-
-        if 0 <= recordId <= 107:
-            my_date = str(ROCsheet.cell(row=i, column=3).value)
-            my_seconds = ROCsheet.cell(row=i, column=393).value
-            if my_seconds not in ['', '0', 0, None]:
-
-                ptmwar = addTime2(my_date, my_seconds)
-                ArrayDict[s]['cr_ptmwar'] = str(ptmwar)
-                cell_obj.value = ptmwar
-
-
-       
-
-        
-
-        # cr_ccems
-        cell_obj = Mapsheet.cell(row=Rowcount, column=59)
-        cell_obj.value = ROCsheet.cell(row=i, column=32).value
-        ArrayDict[s]['cr_ccems'] = ROCsheet.cell(row=i, column=32).value
-
-        # cr_ptmcpr
-        cell_obj = Mapsheet.cell(row=Rowcount, column=60)
-        ArrayDict[s]['cr_ptmcpr '] = ''
-        stm_5 = ROCsheet.cell(row=i, column=375).value
-        rtm_5 = ROCsheet.cell(row=i, column=374).value
-        wtm_5 = ROCsheet.cell(row=i, column=376).value
-
-        my_seconds = checkThreeTimes(stm_5, rtm_5, wtm_5)
-        my_date = str(ROCsheet.cell(row=i, column=3).value)
-        if my_seconds != 0:
-            if my_date is not None:
-                my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
-                ArrayDict[s]['cr_ptmcpr'] = str(addTime(my_date, my_seconds))
-                cell_obj.value = ArrayDict[s]['cr_ptmcpr']
-
-
-        if 0 <= recordId <= 107:
-            my_date = str(ROCsheet.cell(row=i, column=3).value)
-            my_seconds = ROCsheet.cell(row=i, column=369).value
-            if my_seconds not in ['', '0', 0, None]:
-
-                ptmcpr = addTime2(my_date, my_seconds)
-                ArrayDict[s]['cr_ptmcpr'] = str(ptmcpr)
-                cell_obj.value = ptmcpr
-
-
-        # cr_cprcno
-        cell_obj = Mapsheet.cell(row=Rowcount, column=61)
-        ArrayDict[s]['cr_cprcno___1'] = 0
-        if ROCsheet.cell(row=i, column=372).value in [1, '1'] and rtm_5 in [None,''] \
-                and wtm_5 in [None,''] and stm_5 in [None,'']:
-            cell_obj.value = 1
-            ArrayDict[s]['cr_cprcno___1'] = 1
-        # cr_ccmech
-        cell_obj = Mapsheet.cell(row=Rowcount, column=62)
-        cell_obj.value = ROCsheet.cell(row=i, column=34).value
-        ArrayDict[s]['cr_ccmech'] = ROCsheet.cell(row=i, column=34).value
-
-        # cr_emsshk
-        cell_obj = Mapsheet.cell(row=Rowcount, column=63)
-        emsshk = ROCsheet.cell(row=i, column=82).value
-        if emsshk in [0,'0',None,'']:
-            ArrayDict[s]['cr_emsshk'] = 0
-            cell_obj.value = 0
-        elif emsshk in [1,'1']:
-            ArrayDict[s]['cr_emsshk'] = 1
-            cell_obj.value =1
-        # cr_ptmshk --need to come back to this
-        cell_obj = Mapsheet.cell(row=Rowcount, column=64)
-        stm_15 = ROCsheet.cell(row=i, column=431).value
-        rtm_15 = ROCsheet.cell(row=i, column=430).value
-        wtm_15 = ROCsheet.cell(row=i, column=432).value
-
-        my_seconds = checkThreeTimes(stm_15, rtm_15, wtm_15)
-        my_seconds = try_parse_int(my_seconds)
-        my_date = str(ROCsheet.cell(row=i, column=3).value)
-        if my_seconds != 0:
-            if my_date is not None:
-                my_date = datetime.strptime(my_date, "%Y-%m-%d %H:%M:%S")
-                ArrayDict[s]['cr_ptmshk '] = str(addTime(my_date, my_seconds))
-                cell_obj.value = ArrayDict[s]['cr_ptmshk ']
-
-
-        if 0 <= recordId <= 107:
-            my_date = str(ROCsheet.cell(row=i, column=3).value)
-            my_seconds = ROCsheet.cell(row=i, column=425).value
-            if my_seconds not in ['', '0', 0, None]:
-
-                ptmshk = addTime2(my_date, my_seconds)
-                ArrayDict[s]['cr_ptmshk'] = str(ptmshk)
-                cell_obj.value = ptmshk
-
-
-        # cr_shkcno
-        cell_obj = Mapsheet.cell(row=Rowcount, column=65)
-        if ROCsheet.cell(row=i, column=428).value in [1, "1"]:
-            cell_obj.value = ROCsheet.cell(row=i, column=428).value
-            ArrayDict[s]['cr_shkcno___1	'] = ROCsheet.cell(row=i, column=428).value
-        # cr_numshk
-        cell_obj = Mapsheet.cell(row=Rowcount, column=66)
-        if ROCsheet.cell(row=i, column=83).value not in ['0', 0]:
-            cell_obj.value = ROCsheet.cell(row=i, column=83).value
-            ArrayDict[s]['cr_numshk'] = ROCsheet.cell(row=i, column=83).value
-        # cr_jls1
-        cell_obj = Mapsheet.cell(row=Rowcount, column=67)
-        if ROCsheet.cell(row=i, column=316).value not in ['.', '']:
-            ArrayDict[s]['cr_jls1'] = ROCsheet.cell(row=i, column=316).value
-            cell_obj.value = ROCsheet.cell(row=i, column=316).value
-        # cr_jls1cno
-        cell_obj = Mapsheet.cell(row=Rowcount, column=68)
-        if ROCsheet.cell(row=i, column=317).value in [1, "1"]:
-            cell_obj.value = ROCsheet.cell(row=i, column=317).value
-            ArrayDict[s]['cr_jls1_na___1'] = ROCsheet.cell(row=i, column=317).value
-        # cr_jls2
-        cell_obj = Mapsheet.cell(row=Rowcount, column=69)
-
-        if ROCsheet.cell(row=i, column=323).value not in ['.', '']:
-            cell_obj.value = ROCsheet.cell(row=i, column=323).value
-            ArrayDict[s]['cr_jls2'] = ROCsheet.cell(row=i, column=323).value
-        # cr_jls2cno
-        cell_obj = Mapsheet.cell(row=Rowcount, column=70)
-        if ROCsheet.cell(row=i, column=324).value in [1, "1"]:
-            cell_obj.value = ROCsheet.cell(row=i, column=324).value
-            ArrayDict[s]['cr_jls2_na___1'] = ROCsheet.cell(row=i, column=324).value
-        # cr_jls3
-        cell_obj = Mapsheet.cell(row=Rowcount, column=71)
-        if ROCsheet.cell(row=i, column=330).value not in ['.', '']:
-            ArrayDict[s]['cr_jls3'] = ROCsheet.cell(row=i, column=330).value
-            cell_obj.value = ROCsheet.cell(row=i, column=330).value
-        # cr_jls3cno
-        cell_obj = Mapsheet.cell(row=Rowcount, column=72)
-        if ROCsheet.cell(row=i, column=331).value in [1, "1"]:
-            cell_obj.value = ROCsheet.cell(row=i, column=331).value
-            ArrayDict[s]['cr_jls3_na___1'] = ROCsheet.cell(row=i, column=331).value
-
-        # cr_attncbls - come back to this
-        ArrayDict[s]['cr_attncbls'] = ''
-        cell_obj = Mapsheet.cell(row=Rowcount, column=73)
-        attcabl_1 = ROCsheet.cell(row=i, column=320).value
-        attcabl_2 = ROCsheet.cell(row=i, column=327).value
-        attcabl_3 = ROCsheet.cell(row=i, column=335).value
-        if attcabl_1 in [0, '0'] and attcabl_2 in [0, '0'] and attcabl_3 in [0, '0']:
-            cell_obj.value = 0
-            ArrayDict[s]['cr_attncbls'] = 0
-        if attcabl_1 in [1, '1'] or attcabl_2 in [1, '1'] or attcabl_3 in [1, '1']:
-            cell_obj.value = 1
-            ArrayDict[s]['cr_attncbls'] = 1
-        if attcabl_1 in [9, '9'] and attcabl_2 in [9, '9'] and attcabl_3 in [9, '9']:
-            cell_obj.value = 2
-            ArrayDict[s]['cr_attncbls'] = 2
-
-        # cr_bvmatt
-        cell_obj = Mapsheet.cell(row=Rowcount, column=74)
-        cell_obj.value = ROCsheet.cell(row=i, column=35).value
-        ArrayDict[s]['cr_bvmatt___1'] = ROCsheet.cell(row=i, column=35).value
-        ArrayDict[s]['cr_bvmsuc___1'] = ROCsheet.cell(row=i, column=35).value # set BVMSuc successful as well
-
-        # cr_ivatt
-        cell_obj = Mapsheet.cell(row=Rowcount, column=75)
-        cell_obj.value = ROCsheet.cell(row=i, column=59).value
-        ArrayDict[s]['cr_ivatt___1'] = ROCsheet.cell(row=i, column=59).value
-        # cr_ivsuc
-        cell_obj = Mapsheet.cell(row=Rowcount, column=76)
-        cell_obj.value = ROCsheet.cell(row=i, column=60).value
-        ArrayDict[s]['cr_ivsuc___1'] = ROCsheet.cell(row=i, column=60).value
-        # cr_ioatt___1
-        cell_obj = Mapsheet.cell(row=Rowcount, column=77)
-        cell_obj.value = ROCsheet.cell(row=i, column=61).value
-        ArrayDict[s]['cr_ioatt___1'] = ROCsheet.cell(row=i, column=61).value
-        # cr_iosuc___1
-        cell_obj = Mapsheet.cell(row=Rowcount, column=78)
-        cell_obj.value = ROCsheet.cell(row=i, column=62).value
-        ArrayDict[s]['cr_iosuc___1'] = ROCsheet.cell(row=i, column=62).value
-        # cr_lmaatt___1
-        cell_obj = Mapsheet.cell(row=Rowcount, column=79)
-        cell_obj.value = ROCsheet.cell(row=i, column=770).value
-        ArrayDict[s]['cr_lmaatt___1'] = ROCsheet.cell(row=i, column=770).value
-        # cr_lmasuc___1
-        cell_obj = Mapsheet.cell(row=Rowcount, column=80)
-        cell_obj.value = ROCsheet.cell(row=i, column=771).value
-        ArrayDict[s]['cr_lmasuc___1'] = ROCsheet.cell(row=i, column=771).value
-
-        # cr_lmatm
-
-        ArrayDict[s]['cr_lmatm'] = ''
-        condition_met = True
-        notime_check = True
-        cell_obj = Mapsheet.cell(row=Rowcount, column=81)
-
-        stm_21 = ROCsheet.cell(row=i, column=479).value
-        rtm_21 = ROCsheet.cell(row=i, column=478).value
-        wtm_21 = ROCsheet.cell(row=i, column=480).value
-        adj_21 = ROCsheet.cell(row=i, column=473).value
-
-
-        
-
-        # cr_ettcno
-        ArrayDict[s]['cr_ettcno___1'] = ''
-        cell_obj = Mapsheet.cell(row=Rowcount, column=90)
-        tm_check = False
-        if rtm_21 in [0, '0', None, ''] and stm_21 in [0, '0', None, ''] and wtm_21 in [0, '0', None, ''] and adj_21  in [0, '0', None, '']:
-            tm_check = True
-        if condition_met is True and (oetsuc == 1 or netsuc == 1) and tm_check is True:
-            ArrayDict[s]['cr_ettcno___1'] = 1
-            cell_obj.value = 1
-
-        # cr_othawatt
-        cell_obj = Mapsheet.cell(row=Rowcount, column=91)
-        othair = ROCsheet.cell(row=i, column=53).value
-        comtub = ROCsheet.cell(row=i, column=760).value
-        eoa = ROCsheet.cell(row=i, column=763).value
-        igel = ROCsheet.cell(row=i, column=43).value
-        salt = ROCsheet.cell(row=i, column=51).value
-
-        if othair in [1, '1'] or comtub in [1, '1'] or eoa in [1, '1'] or igel in [1, '1'] or salt in [1, '1']:
-            cell_obj.value = 1
-            ArrayDict[s]['cr_othawatt___1'] = 1
-
-        # cr_othawsuc
-        first_condition = False
-        second_condition = False
-        cell_obj = Mapsheet.cell(row=Rowcount, column=92)
-
-        oasucc = ROCsheet.cell(row=i, column=776).value
-        comsuc = ROCsheet.cell(row=i, column=761).value
-        eoasuc = ROCsheet.cell(row=i, column=764).value
-        iglsuc = ROCsheet.cell(row=i, column=44).value
-        crisuc = ROCsheet.cell(row=i, column=56).value
-
-        if oasucc in [1, '1'] or comsuc in [1, '1'] or eoasuc in [1, '1'] or iglsuc in [1, '1'] or crisuc in [1, '1']:
-            first_condition = True
-
-        oetsuc = ROCsheet.cell(row=i, column=39).value
-        netsuc = ROCsheet.cell(row=i, column=41).value
-        ltsuc = ROCsheet.cell(row=i, column=46).value
-        ltdsuc = ROCsheet.cell(row=i, column=48).value
-        ltssuc = ROCsheet.cell(row=i, column=50).value
-        lmassuc = ROCsheet.cell(row=i, column=771).value
-
-        oetsuc, netsuc, ltsuc, ltdsuc, ltssuc, lmassuc
-        if oetsuc in [0, '0', None, ''] and netsuc in [0, '0', None, ''] and ltsuc in [0, '0', None, ''] \
-                and ltdsuc in [0,'0',None,''] and ltssuc in [0, '0', None, ''] and lmassuc in [0, '0', None, '']:
-            second_condition = True
-
-        ArrayDict[s]['cr_othawsuc___1'] = 0
-        if first_condition and second_condition:
-            ArrayDict[s]['cr_othawsuc___1'] = 1
-
-
-       
-
-        # cr_trandate2
-        cell_obj = Mapsheet.cell(row=Rowcount, column=125)
-        cell_obj.value = ROCsheet.cell(row=i, column=488).value
-        ArrayDict[s]['cr_trandate2'] = ROCsheet.cell(row=i, column=488).value
-
-        # cr_trans3
-        cell_obj = Mapsheet.cell(row=Rowcount, column=126)
-        IntValue = try_parse_int(ROCsheet.cell(row=i, column=489).value)
-        if IntValue  != 0:
-            cell_obj.value = 1
-            ArrayDict[s]['cr_trans3___1'] = 1
-
-       
-
-        # Mark all the forms as complete
-
-        ArrayDict[s]['enrollment_complete'] = 2
-        ArrayDict[s]['call_identifiers_complete'] = 2
-        ArrayDict[s]['ems_fire_response_complete'] = 2
-        ArrayDict[s]['cardiac_arrest_info_complete'] = 2
-        ArrayDict[s]['prehospital_interventions_complete'] = 2
-        ArrayDict[s]['cpr_process_complete'] = 2
-        ArrayDict[s]['final_vital_status_complete'] = 2
-
-
-
-        # Reset everything
-
-        # ArrayDict[s]['cr_tx'] = ''
-        #
-        # ArrayDict[s]['cr_epdt'] = ''
-        #
-        # ArrayDict[s]['cr_utmeast'] = ''
-       
-        Rowcount = Rowcount + 1
-
-        if Rowcount % 1000 == 0:
-            print ("Creating datastructure ...")
-        s = s + 1
-    # print(ArrayDict)
-    response = project.import_records(ArrayDict, overwrite='overwrite', format='json') # after creating all the rows of Dictionaries and adding them to arrayDict, load ArrayDict.
-    print(response)
-    workbook.save(filename=fname)
-
-
-if __name__ == "__main__":
-    main()
+username =""
+password = ""
+
+# username =""
+# password = ""
+
+new_columns = {
+    "LAST_NAME_INFO_PERSONAL":	"cr_sname",
+    "FIRST_NAME_INFO_PERSONAL":	"cr_gname",
+    "ADDRESS_1_NT_PICKUP_LOC":	"cr_puadd",
+    "CITY_TOWN_NT_PICKUP_LOC":	"cr_pucity",
+    "UTM":	"cr_utmeast",
+    "DETAILS__INSURANCE_HI":	"cr_hcn",
+    "DATE_OF_BIRTH_INFO_PERSONAL":	"cr_dob",
+    "GENDER_INFO_PERSONAL":	"cr_sexp",
+    "ADDRESS_1__MAILING_ADDR":	"cr_madd",
+    "CITY__MAILING_ADDR":	"cr_mcity",
+    "TYPE_RES_START_CPR":	"cr_tx",
+    "CALL_DATE_DATE_IDENT_GENERAL":	"cr_epdt",
+    "TIME_DATE_PT_TRANSPT_PS":	"cr_ptmlft",
+    "ARREST_WITNESSED_BY_DICARRST":	"cr_witbys",
+    "TYPE_ELCTR_THERAPY":	"cr_emsshk",
+    "DRUG_NAME__DRUG_THERAPY":	"cr_epi",
+    "RECEIVING_FACILITY_ENT_DEST":	"cr_v2hospid1"
+}
+
+mapping = {'F': '0', 'M': '1', 'Unknown': '2'}
+
+witbys_mapping =  {"Bystander": '1',
+                    "Unwitnessed": '0',
+                    "Paramedic":'2', }
+
+
+print(new_columns)
+new_columns_list = list(new_columns.values())
+new_columns_list.append('PATIENT_ID')
+
+print(new_columns_list)
+
+pd.set_option('display.max_columns', None)
+
+TIME_IN_SECONDS = 60
+CALLS = 500
+@sleep_and_retry
+@limits(calls=CALLS, period=TIME_IN_SECONDS)
+def stop_call_api():
+    return
+RCworkbook = load_workbook(filename="////RecordCount.xlsx")
+
+RCsheet = RCworkbook.active
+recordid = RCsheet.cell(row=1, column=1).value + 1
+
+print(str(recordid))
+
+
+with network_share_auth(r"a", username, password):
+    # Define the folder path
+    folder_path = r""
+
+    # Check for Excel files in the folder
+    excel_files = [f for f in os.listdir(folder_path) if f.endswith(('.xlsx', '.xls'))]
+
+    if excel_files:
+        file_path = os.path.join(folder_path, excel_files[0])  # Use the first Excel file found
+        df_callnum = pd.read_excel(file_path,sheet_name="Cases_identified", engine="openpyxl")
+        df_raw_data = pd.read_excel( file_path, sheet_name="RawData_CLEANED", engine="openpyxl")
+        print(f"Loaded: {file_path}")
+
+    else:
+        print("No Excel file found in the folder.")
+        sys.exit()
+
+
+ 
+    df_unique = df_raw_data.drop_duplicates(subset="PATIENT_ID", keep="first")
+
+    num_rows = df_raw_data.shape[0]  # Number of rows
+    print(f"Number of rows: {num_rows}")
+    num_rows = df_unique.shape[0]  # Number of rows
+    print(f"Number of rows: {num_rows}")
+    del(num_rows)
+    gc.collect()  # free up memory after deletion of dataframe df_raw_data
+
+    df_unique = df_unique.rename(columns=new_columns)
+
+    df_unique = df_unique.reset_index(drop=True)
+
+    df_unique = df_unique[new_columns_list]
+
+    print(df_unique)
+
+
+
+    df_unique["cr_utmnorth"]= df_unique["cr_utmeast"]
+    df_unique["cr_hcnv"]=  df_unique["cr_hcn"]
+    df_unique["cr_estagev"]= df_unique["cr_dob"]
+    df_unique["cr_arryth"]= df_unique["cr_epi"]
+    df_unique["cr_nalox"] = df_unique["cr_epi"]
+    df_unique["cr_pacing"]= df_unique["cr_emsshk"]
+    df_unique["cr_estageu"]=   df_unique["cr_dob"]
+    df_unique["cr_estagev"]=   df_unique["cr_dob"]
+    df_unique["cr_ptmrcv"]= df_unique["cr_epdt"]
+    df_unique["cr_ccmech"]= df_unique["cr_tx"]
+    df_unique["cr_pdisp" ]= df_unique["cr_v2hospid1"]
+
+    print(df_unique)
+
+    # Clean up the data
+    df_unique = df_unique.fillna("")
+    df_unique = df_unique.replace({pd.NA: "", pd.NaT: "", None: ""})
+    df_unique['cr_sname'] = df_unique['cr_sname'].replace({'': 'CNO', None: 'CNO','Cno':'CNO','C.N.O.':'CNO', 'No pt contact':'CNO','No Patient Contact':'CNO'}).apply(lambda x: 'CNO' if str(x).strip() == '' else x)
+    df_unique['cr_gname'] = df_unique['cr_sname'].replace({'': 'CNO', None: 'CNO', 'Cno': 'CNO', 'C.N.O.': 'CNO', 'No pt contact': 'CNO','No Patient Contact':'CNO'}).apply(lambda x: 'CNO' if str(x).strip() == '' else x)
+    df_unique['cr_pucity'] = df_unique['cr_pucity'].map(city_dict)
+    df_unique['cr_utmeast'] = df_unique['cr_utmeast'].apply(lambda x: str(x)[:3] if len(str(x)) == 7 and str(x).isdigit() else '')
+    df_unique['cr_utmnorth'] = df_unique['cr_utmnorth'].apply(lambda x: str(x)[-4:] if len(str(x)) == 7 and str(x).isdigit() else '')
+    df_unique['cr_hcn'] = df_unique['cr_hcn'].str.extract(r'Health Insurance Number: (\d+)')
+    df_unique['cr_hcnv'] = df_unique['cr_hcnv'].str.extract(r'Version #: (\w+)')
+    df_unique['cr_dob'] = pd.to_datetime(df_unique['cr_dob'],errors='coerce').dt.date
+    df_unique['cr_sexp'] = df_unique['cr_sexp'].map(mapping).fillna("")
+    df_unique['cr_mcity'] = df_unique['cr_mcity'].map(city_dict)
+    df_unique['cr_tx'] = df_unique['cr_tx'].isin(["Manual Compressions", "AutoPulse"]).astype(int)
+    df_unique['cr_epdt'] = pd.to_datetime(df_unique['cr_epdt'], errors='coerce').dt.date
+    df_unique['age_days'] = (df_unique['cr_epdt'] - df_unique['cr_dob']).dt.days
+    df_unique['cr_estageu'] = df_unique['age_days'].apply(categorize_age)
+    # Calculate age in years (rounding only if decimal is 0.5 or greater)
+    df_unique['cr_estagev'] = df_unique['age_days'].apply(lambda x: round(x / 365) if pd.notna(x) else "")
+    df_unique['cr_pdisp_mic_check'] = df_unique['cr_pdisp']
+    df_unique['cr_pdisp'] = df_unique['cr_pdisp'].notna() & df_unique['cr_pdisp'].ne("")
+    df_unique['cr_pdisp'] = df_unique['cr_pdisp'].astype(int)  # Convert boolean to 0/1
+    df_unique['cr_witbys'] = df_unique['cr_witbys'].map(witbys_mapping).fillna("")
+    df_unique['cr_ptmlft'] = pd.to_datetime(df_unique['cr_ptmlft'], errors = 'coerce').dt.date.fillna("")
+    # Set cr_ccmech to 1 if "AutoPulse" appears anywhere in the text, else blank
+    df_unique['cr_ccmech'] = df_unique['cr_ccmech'].str.contains("AutoPulse", case=False, na=False).astype(int).replace(0,"")
+    df_unique['cr_emsshk'] = df_unique['cr_emsshk'].isin(["(360) Defibrillation - Manual", "(360) Defibrillation - Semi-Automatic"]).astype(int).replace(0,"")
+    df_unique['cr_epi'] = df_unique['cr_epi'].str.contains("epinephrine", case=False, na=False).astype(int).replace(0, "")
+    df_unique['cr_arryth'] = df_unique['cr_arryth'].str.contains("lidocaine", case=False, na=False).astype(int).replace(0, "")
+    df_unique['cr_nalox'] = df_unique['cr_nalox'].str.contains("naloxone", case=False, na=False).astype(int).replace(0, "")
+    df_unique['cr_pacing'] = df_unique['cr_pacing'].str.contains("Pacing – Transcutaneous", case=False, na=False).astype(int).replace(0, "")
+    df_unique['cr_v2hospid1'] = df_unique['cr_v2hospid1'].map(hospital_dict).fillna(0).astype(int)
+    df_unique['cr_record_id'] =  [str(num) + "TO" for num in range(recordid, recordid + len(df_unique))]
+    df_unique = pd.merge(df_unique, df_callnum[['PATIENT_ID', 'Call_Number']], on='PATIENT_ID', how='left')
+    df_unique.rename(columns={'Call_Number': 'cr_callnum'}, inplace=True)
+    del df_unique['PATIENT_ID']
+    del df_unique['age_days']
+    del df_unique['cr_pdisp_mic_check']
+    try:
+
+        API_KEY = ''  #R2 Test
+        stop_call_api()
+
+        project = Project(URL, API_KEY)
+        chunks = [df_unique.iloc[i:i + chunk_size] for i in range(0, len(df_unique), chunk_size)]
+
+        # Example: Process each chunk
+        for idx, chunk in enumerate(chunks):
+            print(f"Processing Chunk {idx + 1} with {len(chunk)} rows")
+            print(chunk)
+            print("\n")
+            response = project.import_records(chunk, overwrite='overwrite', import_format='df')
+            print(response)
+            stop_call_api()
+
+        last_record_id = recordid + len(df_unique) - 1
+        RCsheet.cell(row=1, column=2).value = last_record_id #change to updating column 1
+        print(recordid)
+
+        RCworkbook.save("//vs-research//research//R2_Data//Halton Staging//RecordCount.xlsx")
+
+        try:
+            os.remove(file_path)
+            print(f"Deleted: {file_path}")
+        except PermissionError:
+            print(f"Could not delete {file_path}. It might be open in another program.")
+            sys.exit()
+
+
+    except Exception as e:
+
+        body = str(e)
+        print(body)
+        print(df_unique)
+
+        subject = "York Import error- "
+
+        message = "From: {0}\nTo: {1}\nSubject: {2}\n\n{3}\n\n".format("noreply@smh.ca",
+                                                                       "mcbarnettr@smh.ca",
+                                                                       subject,
+                                                                       body)
+        with SMTP("199.71.171.11", port=25) as smtp:
+            smtp.sendmail("noreply@smh.ca", "mcbarnettr@smh.ca", message)
+
+        sys.exit()
+
+
+
+
+
+
+
+
+
 
 
 
